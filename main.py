@@ -1,7 +1,7 @@
 import os
 import logging
 import requests
-import whois
+import re
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
 from dotenv import load_dotenv
@@ -38,7 +38,7 @@ if not BOT_TOKEN:
 keyboard = [
     ['/start', '/help'],
     ['IP Info', 'Phone Info'],
-    ['Whois Lookup', 'Email Check']
+    ['Domain Info', 'Email Check']
 ]
 
 async def start(update: Update, context: CallbackContext) -> None:
@@ -54,7 +54,7 @@ async def start(update: Update, context: CallbackContext) -> None:
 • /help - помощь
 • IP Info - информация об IP адресе
 • Phone Info - информация о номере телефона
-• Whois Lookup - информация о домене
+• Domain Info - информация о домене
 • Email Check - проверка email
 
 Просто выбери опцию на клавиатуре или отправь мне данные для анализа!
@@ -75,8 +75,8 @@ async def help_command(update: Update, context: CallbackContext) -> None:
 📞 Phone Info:
 Отправь номер телефона для проверки (формат: +79123456789)
 
-🌐 Whois Lookup:
-Отправь домен для получения whois информации
+🌐 Domain Info:
+Отправь домен для получения информации
 
 📧 Email Check:
 Отправь email адрес для базовой проверки
@@ -100,10 +100,10 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
     elif is_phone_number(user_input):
         await get_phone_info(update, user_input)
     elif is_domain(user_input):
-        await get_whois_info(update, user_input)
+        await get_domain_info(update, user_input)
     elif is_email(user_input):
         await get_email_info(update, user_input)
-    elif text in ['IP Info', 'Phone Info', 'Whois Lookup', 'Email Check']:
+    elif text in ['IP Info', 'Phone Info', 'Domain Info', 'Email Check']:
         await handle_button(update, text)
     else:
         await update.message.reply_text(
@@ -120,14 +120,13 @@ async def handle_button(update: Update, button_text: str) -> None:
     responses = {
         'IP Info': '🔍 Отправь мне IP адрес для анализа (например: 8.8.8.8)',
         'Phone Info': '📞 Отправь номер телефона (формат: +79123456789)',
-        'Whois Lookup': '🌐 Отправь домен для whois проверки (например: google.com)',
+        'Domain Info': '🌐 Отправь домен для проверки (например: google.com)',
         'Email Check': '📧 Отправь email адрес для проверки'
     }
     await update.message.reply_text(responses.get(button_text, 'Выбери опцию'))
 
 # Функции проверки типов данных
 def is_ip_address(text: str) -> bool:
-    import re
     ip_pattern = r'^(\d{1,3}\.){3}\d{1,3}$'
     if re.match(ip_pattern, text):
         parts = text.split('.')
@@ -135,17 +134,14 @@ def is_ip_address(text: str) -> bool:
     return False
 
 def is_phone_number(text: str) -> bool:
-    import re
     phone_pattern = r'^\+?[1-9]\d{1,14}$'
     return bool(re.match(phone_pattern, text.replace(' ', '')))
 
 def is_domain(text: str) -> bool:
-    import re
     domain_pattern = r'^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z]{2,})+$'
     return bool(re.match(domain_pattern, text))
 
 def is_email(text: str) -> bool:
-    import re
     email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
     return bool(re.match(email_pattern, text))
 
@@ -179,8 +175,7 @@ async def get_ip_info(update: Update, ip: str) -> None:
 📊 **Техническая информация:**
 • Часовой пояс: {data.get('timezone', 'N/A')}
 • Валюта: {data.get('currency', 'N/A')}
-• Язык: {data.get('languages', 'N/A')}
-        """
+"""
         await update.message.reply_text(info_text)
         
     except Exception as e:
@@ -205,56 +200,35 @@ async def get_phone_info(update: Update, phone: str) -> None:
 💡 **Примечание:** 
 Для расширенной анализа номера телефона требуется подключение 
 к платным API (NumVerify, AbstractAPI и др.)
-        """
+"""
         await update.message.reply_text(info_text)
         
     except Exception as e:
         logger.error(f"Error getting phone info: {e}")
         await update.message.reply_text("❌ Ошибка при анализе номера телефона")
 
-async def get_whois_info(update: Update, domain: str) -> None:
-    """Получение WHOIS информации о домене"""
+async def get_domain_info(update: Update, domain: str) -> None:
+    """Получение информации о домене"""
     try:
-        await update.message.reply_text("🔄 Получаю WHOIS информацию...")
+        await update.message.reply_text("🔄 Анализирую домен...")
         
-        domain_info = whois.whois(domain)
-        
-        # Форматируем даты
-        creation_date = domain_info.creation_date
-        expiration_date = domain_info.expiration_date
-        updated_date = domain_info.updated_date
-        
-        # Если дата - это список, берем первую
-        if isinstance(creation_date, list):
-            creation_date = creation_date[0] if creation_date else 'N/A'
-        if isinstance(expiration_date, list):
-            expiration_date = expiration_date[0] if expiration_date else 'N/A'
-        if isinstance(updated_date, list):
-            updated_date = updated_date[0] if updated_date else 'N/A'
-            
+        # Базовая информация о домене
         info_text = f"""
-🌐 WHOIS информация для: {domain}
+🌐 Информация о домене: {domain}
 
-📅 **Даты:**
-• Создан: {creation_date if creation_date else 'N/A'}
-• Истекает: {expiration_date if expiration_date else 'N/A'}
-• Обновлен: {updated_date if updated_date else 'N/A'}
+📋 **Базовая информация:**
+• Домен: {domain}
+• Проверка формата: {'✅ Корректный' if is_domain(domain) else '❌ Некорректный'}
 
-👤 **Регистратор:**
-• Registrar: {domain_info.registrar if domain_info.registrar else 'N/A'}
-• WHOIS сервер: {domain_info.whois_server if domain_info.whois_server else 'N/A'}
-
-🔒 **Статусы:**
-{chr(10).join(f'• {status}' for status in domain_info.statuses) if domain_info.statuses else '• N/A'}
-
-📧 **Контакты:**
-• Email: {domain_info.emails if domain_info.emails else 'N/A'}
-        """
+💡 **Примечание:**
+Для получения WHOIS информации требуется установка python-whois
+или подключение к WHOIS API
+"""
         await update.message.reply_text(info_text)
         
     except Exception as e:
-        logger.error(f"Error getting WHOIS info: {e}")
-        await update.message.reply_text(f"❌ Ошибка при получении WHOIS информации: {str(e)}")
+        logger.error(f"Error getting domain info: {e}")
+        await update.message.reply_text("❌ Ошибка при анализе домена")
 
 async def get_email_info(update: Update, email: str) -> None:
     """Базовая проверка email"""
@@ -274,7 +248,7 @@ async def get_email_info(update: Update, email: str) -> None:
 💡 **Примечание:**
 Для расширенной проверки email (HIBP, Hunter.io) 
 требуется подключение к специализированным API
-        """
+"""
         await update.message.reply_text(info_text)
         
     except Exception as e:
