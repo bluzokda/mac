@@ -1,12 +1,25 @@
 import os
 import logging
 import requests
+import whois
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
 from dotenv import load_dotenv
+from flask import Flask
 
 # Загрузка переменных окружения
 load_dotenv()
+
+# Flask app для здоровья (health checks)
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "🤖 OSINT Bot is running!"
+
+@app.route('/health')
+def health():
+    return "✅ OK"
 
 # Настройка логирования
 logging.basicConfig(
@@ -17,7 +30,9 @@ logger = logging.getLogger(__name__)
 
 # Токен бота из переменных окружения
 BOT_TOKEN = os.getenv('BOT_TOKEN')
-IPINFO_TOKEN = os.getenv('IPINFO_TOKEN')
+
+if not BOT_TOKEN:
+    raise ValueError("❌ BOT_TOKEN not found in environment variables")
 
 # Клавиатура с командами
 keyboard = [
@@ -202,21 +217,28 @@ async def get_whois_info(update: Update, domain: str) -> None:
     try:
         await update.message.reply_text("🔄 Получаю WHOIS информацию...")
         
-        # Используем whoisxmlapi.com (бесплатно до 1000 запросов в месяц)
-        # Для использования нужно зарегистрироваться и получить API ключ
-        # Пока используем базовую информацию
+        domain_info = whois.whois(domain)
         
-        import whois
-        try:
-            domain_info = whois.whois(domain)
+        # Форматируем даты
+        creation_date = domain_info.creation_date
+        expiration_date = domain_info.expiration_date
+        updated_date = domain_info.updated_date
+        
+        # Если дата - это список, берем первую
+        if isinstance(creation_date, list):
+            creation_date = creation_date[0] if creation_date else 'N/A'
+        if isinstance(expiration_date, list):
+            expiration_date = expiration_date[0] if expiration_date else 'N/A'
+        if isinstance(updated_date, list):
+            updated_date = updated_date[0] if updated_date else 'N/A'
             
-            info_text = f"""
+        info_text = f"""
 🌐 WHOIS информация для: {domain}
 
 📅 **Даты:**
-• Создан: {domain_info.creation_date if domain_info.creation_date else 'N/A'}
-• Истекает: {domain_info.expiration_date if domain_info.expiration_date else 'N/A'}
-• Обновлен: {domain_info.updated_date if domain_info.updated_date else 'N/A'}
+• Создан: {creation_date if creation_date else 'N/A'}
+• Истекает: {expiration_date if expiration_date else 'N/A'}
+• Обновлен: {updated_date if updated_date else 'N/A'}
 
 👤 **Регистратор:**
 • Registrar: {domain_info.registrar if domain_info.registrar else 'N/A'}
@@ -224,25 +246,15 @@ async def get_whois_info(update: Update, domain: str) -> None:
 
 🔒 **Статусы:**
 {chr(10).join(f'• {status}' for status in domain_info.statuses) if domain_info.statuses else '• N/A'}
-            """
-            await update.message.reply_text(info_text)
-            
-        except Exception as whois_error:
-            await update.message.reply_text(f"""
-🌐 Базовая информация для: {domain}
 
-❌ Детальная WHOIS информация недоступна.
-Для полной функциональности требуется:
-1. Установка whois: pip install python-whois
-2. Или подключение WHOIS API
-
-📋 Можно проверить вручную:
-whois {domain}
-            """)
-            
+📧 **Контакты:**
+• Email: {domain_info.emails if domain_info.emails else 'N/A'}
+        """
+        await update.message.reply_text(info_text)
+        
     except Exception as e:
         logger.error(f"Error getting WHOIS info: {e}")
-        await update.message.reply_text("❌ Ошибка при получении WHOIS информации")
+        await update.message.reply_text(f"❌ Ошибка при получении WHOIS информации: {str(e)}")
 
 async def get_email_info(update: Update, email: str) -> None:
     """Базовая проверка email"""
@@ -275,13 +287,8 @@ async def error_handler(update: Update, context: CallbackContext) -> None:
     if update and update.message:
         await update.message.reply_text("❌ Произошла ошибка при обработке запроса")
 
-def main() -> None:
-    """Запуск бота"""
-    if not BOT_TOKEN:
-        logger.error("BOT_TOKEN not found in environment variables")
-        return
-    
-    # Создаем приложение
+def run_bot():
+    """Запуск Telegram бота"""
     application = Application.builder().token(BOT_TOKEN).build()
     
     # Добавляем обработчики
@@ -295,4 +302,13 @@ def main() -> None:
     application.run_polling()
 
 if __name__ == '__main__':
-    main()
+    # Для Railway: запускаем Flask в основном потоке, а бота в отдельном
+    import threading
+    
+    # Запускаем бота в отдельном потоке
+    bot_thread = threading.Thread(target=run_bot, daemon=True)
+    bot_thread.start()
+    
+    # Запускаем Flask app для health checks
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
