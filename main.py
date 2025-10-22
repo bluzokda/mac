@@ -1,4 +1,4 @@
-# main.py
+# main.py — с явным health-check и fallback
 
 import os
 import logging
@@ -15,23 +15,18 @@ from telegram.ext import (
 )
 from flask import Flask, request
 
-# Логирование
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Получаем токен из переменных окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     logger.error("❌ BOT_TOKEN не задан!")
     exit(1)
 
-# Flask app
 app = Flask(__name__)
-
-# Telegram application (глобальная переменная)
 application = None
 
 # === Обработчики Telegram ===
@@ -82,18 +77,23 @@ async def get_ip_info(update: Update, ip: str):
 
 @app.route("/")
 def home():
+    logger.info("🌍 / accessed")
     return "🤖 OSINT Bot is running!"
 
 @app.route("/health")
 def health():
+    logger.info("✅ /health accessed")
     return "✅ OK"
 
-# Webhook для Telegram
 @app.route(f"/webhook/{BOT_TOKEN}", methods=["POST"])
 def telegram_webhook():
     if application:
-        update = Update.de_json(request.get_json(force=True), application.bot)
-        application.update_queue.put_nowait(update)
+        try:
+            update = Update.de_json(request.get_json(force=True), application.bot)
+            application.update_queue.put_nowait(update)
+            logger.info(f"📩 Обновление получено: {update}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка обработки webhook: {e}")
     return "OK"
 
 # === Инициализация бота ===
@@ -104,8 +104,7 @@ async def init_bot():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    # Устанавливаем webhook
-    # Railway автоматически даёт URL через переменную RAILWAY_PUBLIC_DOMAIN
+    # Устанавливаем webhook через RAILWAY_PUBLIC_DOMAIN
     domain = os.getenv("RAILWAY_PUBLIC_DOMAIN")
     if domain:
         webhook_url = f"https://{domain}/webhook/{BOT_TOKEN}"
@@ -121,4 +120,5 @@ if __name__ == "__main__":
     asyncio.run(init_bot())
     
     port = int(os.environ.get("PORT", 5000))
+    logger.info(f"🚀 Запуск Flask на порту {port}")
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
