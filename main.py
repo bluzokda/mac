@@ -1,4 +1,4 @@
-# main.py — webhook версия для Railway
+# main.py — webhook версия с корректным await
 
 import os
 import logging
@@ -14,6 +14,7 @@ from telegram.ext import (
     ContextTypes
 )
 from flask import Flask, request
+import asyncio
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -22,26 +23,21 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-# Устанавливаем URL через переменную окружения — Railway даст его при успешном запуске
-WEBHOOK_URL = f"https://{os.getenv('RAILWAY_PUBLIC_DOMAIN')}" if os.getenv('RAILWAY_PUBLIC_DOMAIN') else None
-
 if not BOT_TOKEN:
     logger.error("❌ BOT_TOKEN not found!")
     exit(1)
 
+# Получаем URL из переменной (ты должен установить её в Railway)
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 if not WEBHOOK_URL:
-    # Если RAILWAY_PUBLIC_DOMAIN не доступен — используем fallback
-    # В Railway это обычно https://<project>.up.railway.app
-    # Но если не работает — можно попробовать получить через API или вручную
-    logger.warning("⚠️ RAILWAY_PUBLIC_DOMAIN not set. Using fallback.")
-    # Попробуем получить из переменной, которую ты можешь установить вручную
-    WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://your-project.up.railway.app")
+    logger.error("❌ WEBHOOK_URL not set! Please add it in Railway Variables.")
+    exit(1)
 
 # Flask app
-app = Flask(__name__)
+flask_app = Flask(__name__)
 
 # Telegram application
-application = Application.builder().token(BOT_TOKEN).build()
+application = None
 
 # === Обработчики ===
 keyboard = [['/start', '/help'], ['IP Info', 'Domain Check']]
@@ -89,36 +85,42 @@ async def get_ip_info(update: Update, ip: str):
         await update.message.reply_text("❌ Ошибка")
 
 # === Flask routes ===
-@app.route('/')
+@flask_app.route('/')
 def home():
     return "🤖 OSINT Bot is running!"
 
-@app.route('/health')
+@flask_app.route('/health')
 def health():
     return "✅ OK"
 
-# Webhook endpoint для Telegram
-@app.route(f'/webhook/{BOT_TOKEN}', methods=['POST'])
+@flask_app.route(f'/webhook/{BOT_TOKEN}', methods=['POST'])
 def telegram_webhook():
-    application.update_queue.put_nowait(
-        Update.de_json(request.get_json(force=True), application.bot)
-    )
+    if application:
+        application.update_queue.put_nowait(
+            Update.de_json(request.get_json(force=True), application.bot)
+        )
     return 'OK'
 
-# === Инициализация ===
-def init_bot():
+# === Инициализация бота (асинхронная) ===
+async def init_bot():
+    global application
+    application = Application.builder().token(BOT_TOKEN).build()
+    
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    # Устанавливаем webhook
+    # Устанавливаем webhook АСИНХРОННО
     webhook_full_url = f"{WEBHOOK_URL}/webhook/{BOT_TOKEN}"
-    application.bot.set_webhook(url=webhook_full_url)
-    logger.info(f"🔗 Webhook установлен: {webhook_full_url}")
+    await application.bot.set_webhook(url=webhook_full_url)
+    logger.info(f"🔗 Webhook успешно установлен: {webhook_full_url}")
 
 # === Запуск ===
 if __name__ == "__main__":
-    init_bot()
+    # Запускаем инициализацию бота
+    asyncio.run(init_bot())
+    
+    # Запускаем Flask
     port = int(os.environ.get("PORT", 5000))
     logger.info(f"🚀 Запуск Flask на порту {port}")
-    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+    flask_app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
