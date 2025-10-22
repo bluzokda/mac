@@ -3,6 +3,7 @@ import logging
 import requests
 import re
 import threading
+import time
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
 from dotenv import load_dotenv
@@ -28,11 +29,19 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-# Токен бота
+# Токен бота с резервной проверкой
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 
 if not BOT_TOKEN:
-    raise ValueError("❌ BOT_TOKEN not found")
+    logging.error("❌ BOT_TOKEN not found in environment variables")
+    logging.info("💡 Please add BOT_TOKEN in Railway Settings → Variables")
+    # Не падаем, а ждем пока переменная будет добавлена
+    while not BOT_TOKEN:
+        logging.info("⏳ Waiting for BOT_TOKEN to be set...")
+        time.sleep(10)
+        BOT_TOKEN = os.getenv('BOT_TOKEN')
+
+logging.info("✅ BOT_TOKEN found, starting bot...")
 
 # Клавиатура
 keyboard = [['/start', '/help'], ['IP Info', 'Domain Check']]
@@ -118,7 +127,6 @@ async def get_domain_info(update: Update, domain: str) -> None:
     try:
         await update.message.reply_text("🔄 Проверяю домен...")
         
-        # Простая проверка через HTTP запрос
         info = f"""
 🌐 Домен: {domain}
 ✅ Формат: Корректный
@@ -161,14 +169,17 @@ async def get_phone_info(update: Update, phone: str) -> None:
 
 def run_bot():
     """Запуск бота в отдельном потоке"""
-    application = Application.builder().token(BOT_TOKEN).build()
-    
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
-    print("🤖 Бот запускается...")
-    application.run_polling()
+    try:
+        application = Application.builder().token(BOT_TOKEN).build()
+        
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("help", help_command))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        
+        logging.info("🤖 Бот запускается...")
+        application.run_polling()
+    except Exception as e:
+        logging.error(f"❌ Ошибка запуска бота: {e}")
 
 if __name__ == '__main__':
     # Запускаем бота в отдельном потоке
@@ -177,4 +188,5 @@ if __name__ == '__main__':
     
     # Запускаем Flask для Railway
     port = int(os.environ.get('PORT', 5000))
+    logging.info(f"🚀 Starting Flask on port {port}")
     app.run(host='0.0.0.0', port=port)
