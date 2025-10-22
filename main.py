@@ -1,4 +1,4 @@
-# main.py — используем WEBHOOK (стабильно на Python 3.13 + Railway)
+# main.py — webhook версия для Railway
 
 import os
 import logging
@@ -15,24 +15,27 @@ from telegram.ext import (
 )
 from flask import Flask, request
 
-# Логирование
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# === НАСТРОЙКИ ===
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Например: https://your-project.up.railway.app
+# Устанавливаем URL через переменную окружения — Railway даст его при успешном запуске
+WEBHOOK_URL = f"https://{os.getenv('RAILWAY_PUBLIC_DOMAIN')}" if os.getenv('RAILWAY_PUBLIC_DOMAIN') else None
 
 if not BOT_TOKEN:
     logger.error("❌ BOT_TOKEN not found!")
     exit(1)
 
 if not WEBHOOK_URL:
-    logger.error("❌ WEBHOOK_URL not found! Set it in Railway variables.")
-    exit(1)
+    # Если RAILWAY_PUBLIC_DOMAIN не доступен — используем fallback
+    # В Railway это обычно https://<project>.up.railway.app
+    # Но если не работает — можно попробовать получить через API или вручную
+    logger.warning("⚠️ RAILWAY_PUBLIC_DOMAIN not set. Using fallback.")
+    # Попробуем получить из переменной, которую ты можешь установить вручную
+    WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://your-project.up.railway.app")
 
 # Flask app
 app = Flask(__name__)
@@ -97,7 +100,6 @@ def health():
 # Webhook endpoint для Telegram
 @app.route(f'/webhook/{BOT_TOKEN}', methods=['POST'])
 def telegram_webhook():
-    # Передаём обновление в Telegram
     application.update_queue.put_nowait(
         Update.de_json(request.get_json(force=True), application.bot)
     )
@@ -105,7 +107,6 @@ def telegram_webhook():
 
 # === Инициализация ===
 def init_bot():
-    # Регистрируем обработчики
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
