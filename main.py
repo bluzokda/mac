@@ -2,15 +2,16 @@ import os
 import logging
 import requests
 import re
-import threading
-import time
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
-from dotenv import load_dotenv
 from flask import Flask
 
-# Загрузка переменных окружения
-load_dotenv()
+# Настройка логирования
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
 # Flask app для здоровья
 app = Flask(__name__)
@@ -23,25 +24,15 @@ def home():
 def health():
     return "✅ OK"
 
-# Настройка логирования
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-
-# Токен бота с резервной проверкой
+# Получаем токен
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 
 if not BOT_TOKEN:
-    logging.error("❌ BOT_TOKEN not found in environment variables")
-    logging.info("💡 Please add BOT_TOKEN in Railway Settings → Variables")
-    # Не падаем, а ждем пока переменная будет добавлена
-    while not BOT_TOKEN:
-        logging.info("⏳ Waiting for BOT_TOKEN to be set...")
-        time.sleep(10)
-        BOT_TOKEN = os.getenv('BOT_TOKEN')
-
-logging.info("✅ BOT_TOKEN found, starting bot...")
+    logger.error("❌ BOT_TOKEN not found!")
+    # Для Railway просто выходим, так как без токена бот не может работать
+    exit(1)
+else:
+    logger.info("✅ BOT_TOKEN found")
 
 # Клавиатура
 keyboard = [['/start', '/help'], ['IP Info', 'Domain Check']]
@@ -121,6 +112,7 @@ async def get_ip_info(update: Update, ip: str) -> None:
             await update.message.reply_text("❌ Не удалось получить информацию об IP")
             
     except Exception as e:
+        logger.error(f"Error getting IP info: {e}")
         await update.message.reply_text("❌ Ошибка при анализе IP")
 
 async def get_domain_info(update: Update, domain: str) -> None:
@@ -134,7 +126,8 @@ async def get_domain_info(update: Update, domain: str) -> None:
 """
         await update.message.reply_text(info)
         
-    except Exception:
+    except Exception as e:
+        logger.error(f"Error getting domain info: {e}")
         await update.message.reply_text("❌ Ошибка при проверке домена")
 
 async def get_email_info(update: Update, email: str) -> None:
@@ -149,7 +142,8 @@ async def get_email_info(update: Update, email: str) -> None:
 """
         await update.message.reply_text(info)
         
-    except Exception:
+    except Exception as e:
+        logger.error(f"Error getting email info: {e}")
         await update.message.reply_text("❌ Ошибка при анализе email")
 
 async def get_phone_info(update: Update, phone: str) -> None:
@@ -164,11 +158,12 @@ async def get_phone_info(update: Update, phone: str) -> None:
 """
         await update.message.reply_text(info)
         
-    except Exception:
+    except Exception as e:
+        logger.error(f"Error getting phone info: {e}")
         await update.message.reply_text("❌ Ошибка при анализе номера")
 
 def run_bot():
-    """Запуск бота в отдельном потоке"""
+    """Запуск бота"""
     try:
         application = Application.builder().token(BOT_TOKEN).build()
         
@@ -176,17 +171,21 @@ def run_bot():
         application.add_handler(CommandHandler("help", help_command))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         
-        logging.info("🤖 Бот запускается...")
-        application.run_polling()
+        logger.info("🤖 Бот запускается...")
+        application.run_polling(drop_pending_updates=True)
+        
     except Exception as e:
-        logging.error(f"❌ Ошибка запуска бота: {e}")
+        logger.error(f"❌ Ошибка запуска бота: {e}")
 
 if __name__ == '__main__':
+    import threading
+    
     # Запускаем бота в отдельном потоке
     bot_thread = threading.Thread(target=run_bot, daemon=True)
     bot_thread.start()
+    logger.info("🤖 Bot thread started")
     
     # Запускаем Flask для Railway
     port = int(os.environ.get('PORT', 5000))
-    logging.info(f"🚀 Starting Flask on port {port}")
-    app.run(host='0.0.0.0', port=port)
+    logger.info(f"🚀 Starting Flask on port {port}")
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
