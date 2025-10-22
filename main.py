@@ -1,4 +1,4 @@
-# main.py — OSINT бот с полным логированием
+# main.py — polling версия для Railway
 
 import os
 import logging
@@ -13,30 +13,21 @@ from telegram.ext import (
     filters,
     ContextTypes
 )
-from flask import Flask, request
+from flask import Flask
+import threading
 
-# Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Получаем переменные окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-
 if not BOT_TOKEN:
     logger.error("❌ BOT_TOKEN не задан!")
     exit(1)
 
-if not WEBHOOK_URL:
-    logger.error("❌ WEBHOOK_URL не задан! Добавь его в Railway Variables.")
-    exit(1)
-
-# Flask app
 app = Flask(__name__)
-application = None
 
 # === Обработчики Telegram ===
 
@@ -95,53 +86,35 @@ async def get_ip_info(update: Update, ip: str):
 
 @app.route("/")
 def home():
-    logger.info("🌍 Запрос к корневому маршруту /")
     return "🤖 OSINT Bot is running!"
 
 @app.route("/health")
 def health():
-    logger.info("✅ Health-check запрос")
     return "✅ OK"
 
-@app.route(f"/webhook/{BOT_TOKEN}", methods=["POST"])
-def telegram_webhook():
-    try:
-        data = request.get_json(force=True)
-        logger.info(f"📩 Получено обновление от Telegram: {data}")
-        
-        if application:
-            update = Update.de_json(data, application.bot)
-            application.update_queue.put_nowait(update)
-            logger.info(f"✅ Обновление передано в очередь обработки")
-        else:
-            logger.warning("⚠️ Application не инициализирован!")
-            
-    except Exception as e:
-        logger.error(f"💥 Ошибка в webhook: {e}")
-    
-    return "OK"
+# === Запуск бота ===
 
-# === Инициализация бота ===
-
-async def init_bot():
-    global application
-    logger.info("🚀 Инициализация Telegram бота...")
-    
+def run_bot():
+    """Запускает Telegram бота в основном потоке"""
     application = Application.builder().token(BOT_TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    # Устанавливаем webhook
-    webhook_full_url = f"{WEBHOOK_URL}/webhook/{BOT_TOKEN}"
-    await application.bot.set_webhook(url=webhook_full_url)
-    logger.info(f"🔗 Webhook успешно установлен: {webhook_full_url}")
+    logger.info("▶️ Запуск бота в режиме polling...")
+    application.run_polling(drop_pending_updates=True)
 
-# === Запуск ===
+# === Точка входа ===
 
 if __name__ == "__main__":
-    import asyncio
-    asyncio.run(init_bot())
+    # Запускаем Flask в фоновом потоке
+    flask_thread = threading.Thread(target=lambda: app.run(
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 5000)),
+        debug=False,
+        use_reloader=False
+    ), daemon=True)
+    flask_thread.start()
+    logger.info("🌐 Flask запущен в фоновом потоке")
     
-    port = int(os.environ.get("PORT", 5000))
-    logger.info(f"🚀 Запуск Flask сервера на порту {port}")
-    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+    # Запускаем бота в основном потоке
+    run_bot()
