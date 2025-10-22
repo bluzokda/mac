@@ -1,4 +1,4 @@
-# main.py — продвинутый OSINT бот
+# main.py — OSINT бот с продвинутым IP-анализом
 
 import os
 import logging
@@ -27,7 +27,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-HIBP_API_KEY = os.getenv("HIBP_API_KEY")  # Optional
+HIBP_API_KEY = os.getenv("HIBP_API_KEY")  # Для проверки email в утечках (опционально)
 
 if not BOT_TOKEN:
     logger.error("❌ BOT_TOKEN не задан!")
@@ -54,50 +54,55 @@ def is_phone_number(text):
 def is_vk_link(text):
     return bool(re.match(r'https?://(www\.)?vk\.com/[\w.-]+', text, re.IGNORECASE))
 
-# === OSINT функции ===
+# === OSINT ФУНКЦИИ ===
 
 async def get_ip_info(update: Update, ip: str):
-    await update.message.reply_text("🔄 Анализирую IP...")
+    await update.message.reply_text("🔍 Анализирую IP через 2 источника...")
     
-    # Попробуем ipapi.co
+    # === Источник 1: ipapi.co (бесплатно, без ключа) ===
     try:
         r = requests.get(f"https://ipapi.co/{ip}/json/", timeout=8)
         if r.status_code == 200:
-            d = r.json()
-            if not d.get("error"):
-                msg = f"""
+            data = r.json()
+            if not data.get("error"):
+                info = f"""
 🌐 IP: {ip}
-📍 Страна: {d.get('country_name', 'N/A')}
-🏙️ Город: {d.get('city', 'N/A')}
-📡 Провайдер: {d.get('org', 'N/A')}
-🕒 Часовой пояс: {d.get('timezone', 'N/A')}
+📍 Страна: {data.get('country_name', 'N/A')}
+🏙️ Город: {data.get('city', 'N/A')}
+📡 Провайдер: {data.get('org', 'N/A')}
+🕒 Часовой пояс: {data.get('timezone', 'N/A')}
+🔧 Тип подключения: {'Мобильный' if data.get('type') == 'mobile' else 'Стационарный'}
 """
-                await update.message.reply_text(msg)
+                await update.message.reply_text(info)
                 return
-    except:
-        pass
+    except Exception as e:
+        logger.warning(f"ipapi.co error: {e}")
     
-    # Fallback на ipinfo.io
+    # === Источник 2: ipinfo.io (бесплатно, без ключа) ===
     try:
         r = requests.get(f"https://ipinfo.io/{ip}/json", timeout=8)
         if r.status_code == 200:
-            d = r.json()
-            msg = f"""
+            data = r.json()
+            loc = data.get('loc', 'N/A,N/A').split(',')
+            lat = loc[0] if len(loc) > 0 else 'N/A'
+            lon = loc[1] if len(loc) > 1 else 'N/A'
+            
+            info = f"""
 🌐 IP: {ip}
-📍 Страна: {d.get('country', 'N/A')}
-🏙️ Город: {d.get('city', 'N/A')}
-📡 Провайдер: {d.get('org', 'N/A')}
+📍 Страна: {data.get('country', 'N/A')}
+🏙️ Город: {data.get('city', 'N/A')}
+📡 Провайдер: {data.get('org', 'N/A')}
+🧭 Координаты: {lat}, {lon}
 """
-            await update.message.reply_text(msg)
+            await update.message.reply_text(info)
             return
-    except:
-        pass
+    except Exception as e:
+        logger.warning(f"ipinfo.io error: {e}")
     
     await update.message.reply_text("❌ Не удалось получить данные об IP")
 
 async def get_phone_info(update: Update, phone: str):
     await update.message.reply_text("📞 Анализирую номер...")
-    
     try:
         parsed = phonenumbers.parse(phone, None)
         country = geocoder.description_for_number(parsed, "ru")
@@ -110,7 +115,7 @@ async def get_phone_info(update: Update, phone: str):
 📍 Страна: {country or 'N/A'}
 📡 Оператор: {operator or 'N/A'}
 ✅ Валиден: {'Да' if is_valid else 'Нет'}
-⚠️ Примечание: Данные о владельце недоступны публично
+⚠️ Владелец: Недоступно (только у оператора)
 """
         await update.message.reply_text(info)
     except Exception as e:
@@ -119,7 +124,6 @@ async def get_phone_info(update: Update, phone: str):
 
 async def get_email_info(update: Update, email: str):
     await update.message.reply_text("📧 Анализирую email...")
-    
     domain = email.split('@')[1]
     
     # MX записи
@@ -130,16 +134,20 @@ async def get_email_info(update: Update, email: str):
     except:
         mx_text = "Нет MX-записей"
     
-    # Проверка в утечках (если есть API ключ)
-    breach_info = "🔍 Утечки: Не проверялось (нужен HIBP_API_KEY)"
+    # Проверка утечек (если есть ключ)
+    breach_info = "🔍 Утечки: Не проверялось"
     if HIBP_API_KEY:
         try:
             headers = {"hibp-api-key": HIBP_API_KEY}
-            r = requests.get(f"https://haveibeenpwned.com/api/v3/breachedaccount/{email}", headers=headers, timeout=10)
+            r = requests.get(
+                f"https://haveibeenpwned.com/api/v3/breachedaccount/{email}",
+                headers=headers,
+                timeout=10
+            )
             if r.status_code == 200:
                 breaches = r.json()
-                breach_names = [b['Name'] for b in breaches[:3]]
-                breach_info = f"🔍 Утечки: {', '.join(breach_names)}"
+                names = [b['Name'] for b in breaches[:3]]
+                breach_info = f"🔍 Утечки: {', '.join(names)}"
             elif r.status_code == 404:
                 breach_info = "✅ Утечек не найдено"
         except:
@@ -152,18 +160,12 @@ async def get_email_info(update: Update, email: str):
 {mx_text}
 
 {breach_info}
-
-💡 Примечание: Данные о владельце недоступны публично
 """
     await update.message.reply_text(info)
 
 async def get_vk_info(update: Update, link: str):
-    await update.message.reply_text("🕵️‍♂️ Анализирую профиль ВК...")
-    
-    # Извлекаем ID или короткое имя
-    username = link.split('/')[-1]
-    if '?' in username:
-        username = username.split('?')[0]
+    await update.message.reply_text("🕵️‍♂️ Парсинг ВК (публичные данные)...")
+    username = link.split('/')[-1].split('?')[0]
     
     try:
         url = f"https://vk.com/{username}"
@@ -174,44 +176,44 @@ async def get_vk_info(update: Update, link: str):
             soup = BeautifulSoup(r.text, 'html.parser')
             title = soup.find('title')
             if title and "not found" not in title.text.lower():
-                profile_info = f"""
+                info = f"""
 🔗 Профиль: {url}
-📝 Заголовок: {title.text if title else 'N/A'}
+📝 Имя: {title.text.replace(' | ВКонтакте', '')}
 
-🔍 Примечание: 
-• Полные данные недоступны без авторизации
-• Если профиль закрыт — видна только публичная информация
-• Для глубокого анализа нужны специальные инструменты
+💡 Данные:
+• Только публичная информация
+• Закрытые профили не анализируются
+• Для глубокого OSINT нужны спец.инструменты
 """
-                await update.message.reply_text(profile_info)
+                await update.message.reply_text(info)
             else:
                 await update.message.reply_text("❌ Профиль не найден или закрыт")
         else:
-            await update.message.reply_text("❌ Не удалось получить данные ВК")
+            await update.message.reply_text("❌ Ошибка доступа к ВК")
     except Exception as e:
         logger.error(f"VK error: {e}")
         await update.message.reply_text("❌ Ошибка при анализе ВК")
 
-# === Обработчики ===
+# === ОСНОВНЫЕ ОБРАБОТЧИКИ ===
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     text = """
-🔍 OSINT Бот v2.0
+🔍 OSINT Бот v2.1
 
 Отправь:
-• IP-адрес
-• Email 
+• IP-адрес (8.8.8.8)
+• Email (user@gmail.com)
 • Телефон (+79991234567)
 • Ссылку ВК (https://vk.com/id123)
 
-⚠️ Важно: Многие данные недоступны публично из-за приватности
+⚠️ Многие данные недоступны публично из-за приватности
 """
     await update.message.reply_text(f"👋 Привет, {user.first_name}!\n{text}")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
-    logger.info(f"📨 Получено: '{text}'")
+    logger.info(f"📨 Получено: '{text}' от {update.effective_user.id}")
 
     if is_ip(text):
         await get_ip_info(update, text)
@@ -222,9 +224,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif is_vk_link(text):
         await get_vk_info(update, text)
     else:
-        await update.message.reply_text("❌ Не распознал. Отправь IP, email, телефон или ссылку ВК.")
+        await update.message.reply_text("❌ Не распознал. Используй примеры из /start")
 
-# === Flask ===
+# === FLASK ДЛЯ RAILWAY ===
 
 @app.route("/")
 def home():
@@ -234,20 +236,23 @@ def home():
 def health():
     return "✅ OK"
 
-# === Запуск ===
+# === ЗАПУСК БОТА ===
 
 def run_bot():
     application = Application.builder().token(BOT_TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    logger.info("▶️ Бот запущен")
     application.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
-    # Установим переменные для парсинга
-    os.environ.setdefault('SCRAPY_SETTINGS_MODULE', 'settings')
-    
     flask_thread = threading.Thread(
-        target=lambda: app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False, use_reloader=False),
+        target=lambda: app.run(
+            host="0.0.0.0",
+            port=int(os.environ.get("PORT", 5000)),
+            debug=False,
+            use_reloader=False
+        ),
         daemon=True
     )
     flask_thread.start()
