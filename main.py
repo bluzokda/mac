@@ -2,6 +2,7 @@ import os
 import logging
 import requests
 import re
+import ipaddress
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
 from flask import Flask
@@ -13,7 +14,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Flask app для здоровья
+# Flask app для health-check (требуется Railway)
 app = Flask(__name__)
 
 @app.route('/')
@@ -24,12 +25,11 @@ def home():
 def health():
     return "✅ OK"
 
-# Получаем токен
+# Получаем токен бота
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 
 if not BOT_TOKEN:
     logger.error("❌ BOT_TOKEN not found!")
-    # Для Railway просто выходим, так как без токена бот не может работать
     exit(1)
 else:
     logger.info("✅ BOT_TOKEN found")
@@ -75,23 +75,31 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
     else:
         await update.message.reply_text("❌ Не понял запрос. Используй кнопки или отправь данные для анализа")
 
+# --- Валидаторы ---
+
 def is_ip_address(text: str) -> bool:
-    pattern = r'^(\d{1,3}\.){3}\d{1,3}$'
-    if re.match(pattern, text):
-        return all(0 <= int(part) <= 255 for part in text.split('.'))
-    return False
+    try:
+        ipaddress.ip_address(text)
+        return True
+    except ValueError:
+        return False
 
 def is_phone_number(text: str) -> bool:
-    pattern = r'^\+?[1-9]\d{1,14}$'
-    return bool(re.match(pattern, text.replace(' ', '')))
+    # Убираем пробелы и проверяем по E.164 (до 15 цифр)
+    cleaned = re.sub(r'[^\d+]', '', text)
+    return bool(re.match(r'^\+?[1-9]\d{1,14}$', cleaned))
 
 def is_domain(text: str) -> bool:
+    if len(text) > 253:
+        return False
     pattern = r'^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z]{2,})+$'
     return bool(re.match(pattern, text))
 
 def is_email(text: str) -> bool:
     pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
     return bool(re.match(pattern, text))
+
+# --- OSINT функции ---
 
 async def get_ip_info(update: Update, ip: str) -> None:
     try:
@@ -100,6 +108,9 @@ async def get_ip_info(update: Update, ip: str) -> None:
         
         if response.status_code == 200:
             data = response.json()
+            if 'error' in data:
+                await update.message.reply_text("❌ Некорректный или приватный IP")
+                return
             info = f"""
 🌐 IP: {ip}
 📍 Страна: {data.get('country_name', 'N/A')}
@@ -110,7 +121,6 @@ async def get_ip_info(update: Update, ip: str) -> None:
             await update.message.reply_text(info)
         else:
             await update.message.reply_text("❌ Не удалось получить информацию об IP")
-            
     except Exception as e:
         logger.error(f"Error getting IP info: {e}")
         await update.message.reply_text("❌ Ошибка при анализе IP")
@@ -118,14 +128,12 @@ async def get_ip_info(update: Update, ip: str) -> None:
 async def get_domain_info(update: Update, domain: str) -> None:
     try:
         await update.message.reply_text("🔄 Проверяю домен...")
-        
         info = f"""
 🌐 Домен: {domain}
 ✅ Формат: Корректный
-💡 Для детальной WHOIS информации требуется дополнительная настройка
+💡 Для WHOIS-данных скоро добавлю поддержку!
 """
         await update.message.reply_text(info)
-        
     except Exception as e:
         logger.error(f"Error getting domain info: {e}")
         await update.message.reply_text("❌ Ошибка при проверке домена")
@@ -133,15 +141,13 @@ async def get_domain_info(update: Update, domain: str) -> None:
 async def get_email_info(update: Update, email: str) -> None:
     try:
         await update.message.reply_text("🔄 Анализирую email...")
-        domain = email.split('@')[1] if '@' in email else ''
-        
+        domain = email.split('@')[1] if '@' in email else 'N/A'
         info = f"""
 📧 Email: {email}
 🌐 Домен: {domain}
 ✅ Формат: Корректный
 """
         await update.message.reply_text(info)
-        
     except Exception as e:
         logger.error(f"Error getting email info: {e}")
         await update.message.reply_text("❌ Ошибка при анализе email")
@@ -149,21 +155,21 @@ async def get_email_info(update: Update, email: str) -> None:
 async def get_phone_info(update: Update, phone: str) -> None:
     try:
         await update.message.reply_text("🔄 Анализирую номер...")
-        cleaned = phone.replace('+', '').replace(' ', '')
-        
+        cleaned = re.sub(r'[^\d+]', '', phone)
         info = f"""
 📞 Номер: {phone}
-🔢 Формат: +{cleaned}
-📏 Длина: {len(cleaned)} цифр
+🔢 Нормализован: +{cleaned.lstrip('+')}
+📏 Длина: {len(cleaned.lstrip('+'))} цифр
 """
         await update.message.reply_text(info)
-        
     except Exception as e:
         logger.error(f"Error getting phone info: {e}")
         await update.message.reply_text("❌ Ошибка при анализе номера")
 
+# --- Запуск бота ---
+
 def run_bot():
-    """Запуск бота"""
+    """Запуск Telegram бота"""
     try:
         application = Application.builder().token(BOT_TOKEN).build()
         
@@ -176,16 +182,24 @@ def run_bot():
         
     except Exception as e:
         logger.error(f"❌ Ошибка запуска бота: {e}")
+        raise  # чтобы основной поток упал, если бот не запустился
 
-if __name__ == '__main__':
-    import threading
-    
-    # Запускаем бота в отдельном потоке
-    bot_thread = threading.Thread(target=run_bot, daemon=True)
-    bot_thread.start()
-    logger.info("🤖 Bot thread started")
-    
-    # Запускаем Flask для Railway
+# --- Запуск Flask в фоне ---
+
+def run_flask():
     port = int(os.environ.get('PORT', 5000))
     logger.info(f"🚀 Starting Flask on port {port}")
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+
+# --- Точка входа ---
+
+if __name__ == '__main__':
+    import threading
+
+    # Запускаем Flask в фоновом потоке (только для Railway health-check)
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    logger.info("🌐 Flask thread started")
+
+    # Запускаем бота в ОСНОВНОМ потоке — это критично!
+    run_bot()
