@@ -1,4 +1,4 @@
-# main.py — с явным health-check и fallback
+# main.py — с явным WEBHOOK_URL
 
 import os
 import logging
@@ -22,8 +22,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+
 if not BOT_TOKEN:
     logger.error("❌ BOT_TOKEN не задан!")
+    exit(1)
+
+if not WEBHOOK_URL:
+    logger.error("❌ WEBHOOK_URL не задан! Добавь его в Variables.")
     exit(1)
 
 app = Flask(__name__)
@@ -77,23 +83,17 @@ async def get_ip_info(update: Update, ip: str):
 
 @app.route("/")
 def home():
-    logger.info("🌍 / accessed")
     return "🤖 OSINT Bot is running!"
 
 @app.route("/health")
 def health():
-    logger.info("✅ /health accessed")
     return "✅ OK"
 
 @app.route(f"/webhook/{BOT_TOKEN}", methods=["POST"])
 def telegram_webhook():
     if application:
-        try:
-            update = Update.de_json(request.get_json(force=True), application.bot)
-            application.update_queue.put_nowait(update)
-            logger.info(f"📩 Обновление получено: {update}")
-        except Exception as e:
-            logger.error(f"❌ Ошибка обработки webhook: {e}")
+        update = Update.de_json(request.get_json(force=True), application.bot)
+        application.update_queue.put_nowait(update)
     return "OK"
 
 # === Инициализация бота ===
@@ -104,14 +104,9 @@ async def init_bot():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    # Устанавливаем webhook через RAILWAY_PUBLIC_DOMAIN
-    domain = os.getenv("RAILWAY_PUBLIC_DOMAIN")
-    if domain:
-        webhook_url = f"https://{domain}/webhook/{BOT_TOKEN}"
-        await application.bot.set_webhook(url=webhook_url)
-        logger.info(f"🔗 Webhook установлен: {webhook_url}")
-    else:
-        logger.warning("⚠️ RAILWAY_PUBLIC_DOMAIN не найден. Webhook не установлен.")
+    webhook_full_url = f"{WEBHOOK_URL}/webhook/{BOT_TOKEN}"
+    await application.bot.set_webhook(url=webhook_full_url)
+    logger.info(f"🔗 Webhook установлен: {webhook_full_url}")
 
 # === Запуск ===
 
@@ -120,5 +115,4 @@ if __name__ == "__main__":
     asyncio.run(init_bot())
     
     port = int(os.environ.get("PORT", 5000))
-    logger.info(f"🚀 Запуск Flask на порту {port}")
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
